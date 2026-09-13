@@ -15,26 +15,40 @@ jobs:
 
       - name: Auto Detect and Download Image Builder
         run: |
-          # 自动获取最新 24.10.x 正式版版本号
-          VERSION=$(curl -s https://downloads.immortalwrt.org/releases/ | grep -oE '24\.10\.[0-9]+' | sort -V | tail -n 1)
+          VERSION=$(curl -s https://immortalwrt.org | grep -oE '24\.10\.[0-9]+' | sort -V | tail -n 1)
           echo "Detected latest version: $VERSION"
-          wget -q "https://immortalwrt.org{VERSION}/targets/mediatek/filogic/immortalwrt-imagebuilder-${VERSION}-mediatek-filogic.Linux-x86_64.tar.zst"
+          wget -q "https://immortalwrt.org${VERSION}/targets/mediatek/filogic/immortalwrt-imagebuilder-${VERSION}-mediatek-filogic.Linux-x86_64.tar.zst"
           tar -I zstd -xf immortalwrt-imagebuilder-*.tar.zst
           mv immortalwrt-imagebuilder-* ib
 
-      - name: Hard-inject daed 1.27 IPK into Packages Pool
-        run: |
-          cd ib && mkdir -p packages
-          # 直接将 1.27 的二进制包与面板包塞入本地打包池
-          wget -qO packages/daed_1.27.ipk "https://cooluc.com"
-          wget -qO packages/luci-app-daed.ipk "https://cooluc.com"
-
-      - name: Compile and High-Compress into ROM
+      - name: Extract daed 1.27 Core into Rootfs
         run: |
           cd ib
-          # 核心修复：通过“-”号强制砍掉官方源里没用的重型多余包，腾出大量空间
-          # 完美集成 mwan3、Vless/Hysteria2 证书组件 (ca-bundle)、eBPF 内核依赖并压入只读 ROM 层
-          make image PROFILE="netcore_n60-pro" PACKAGES="luci-app-mwan3 mwan3 luci-app-daed daed kmod-sched-bpf kmod-tun ca-bundle ip-full nftables-mod-extra -dae -dnsmasq-full -strongswan -vlmcsd"
+          # 创建标准的系统根目录结构
+          mkdir -p files/usr/bin files/etc/init.d files/etc/config
+          
+          # 下载 1.27 版本的最新单体 ipk
+          wget -qO /tmp/daed_1.27.ipk "https://cooluc.com"
+          wget -qO /tmp/luci_daed.ipk "https://cooluc.com"
+          
+          # 直接在云端解压并提取 1.27 核心程序和 Luci 页面，直接塞进 files 目录
+          cd /tmp
+          tar -zxf daed_1.27.ipk && tar -zxf data.tar.gz && cp -r usr/bin/* $GITHUB_WORKSPACE/ib/files/usr/bin/ 2>/dev/null || true
+          cp -r etc/init.d/* $GITHUB_WORKSPACE/ib/files/etc/init.d/ 2>/dev/null || true
+          
+          rm -rf * && tar -zxf luci_daed.ipk && tar -zxf data.tar.gz && cp -r usr/* $GITHUB_WORKSPACE/ib/files/usr/ 2>/dev/null || true
+          cp -r etc/* $GITHUB_WORKSPACE/ib/files/etc/ 2>/dev/null || true
+          
+          # 确保脚本具备执行权限
+          chmod +x $GITHUB_WORKSPACE/ib/files/usr/bin/*
+          chmod +x $GITHUB_WORKSPACE/ib/files/etc/init.d/*
+
+      - name: Compile and Flash (Files Injection Mode)
+        run: |
+          cd ib
+          # 只在官方源里安装双宽带 mwan3 和 eBPF 必要的内核依赖（不填 daed，完全避免同名包死锁冲突）
+          # 通过 FILES="files" 机制，把上面解压好的 1.27 核心文件无缝缝合进系统只读 SquashFS 中
+          make image PROFILE="netcore_n60-pro" PACKAGES="luci-app-mwan3 mwan3 kmod-sched-bpf kmod-tun ca-bundle ip-full nftables-mod-extra" FILES="files"
 
       - name: Upload Finished Firmware
         uses: actions/upload-artifact@v4
