@@ -1,0 +1,44 @@
+name: Build N60 Pro Firmware with daed 1.27
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Space cleanup & Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get update
+          sudo apt-get install -y build-essential zstd libncurses5-dev gawk git jq
+
+      - name: Download ImmortalWrt Image Builder
+        run: |
+          # 针对 磊科 N60 Pro (mediatek/filogic 平台) 下载最新的 24.10 离线打包沙盒
+          wget -q https://immortalwrt.org
+          tar -I zstd -xf immortalwrt-imagebuilder-*.tar.zst
+          mv immortalwrt-imagebuilder-* ib && cd ib
+
+      - name: Cache & Pre-inject daed 1.27 IPK
+        run: |
+          cd ib
+          mkdir -p packages
+          # 提前抓取 1.27 版本的 daed 以及 Hysteria2 内核依赖（aarch64_cortex-a53 架构）
+          wget -qO packages/daed_1.27.ipk "https://cooluc.com"
+          wget -qO packages/luci-app-daed.ipk "https://cooluc.com"
+
+      - name: Compile and Flash directly into ROM
+        run: |
+          cd ib
+          # 编译命令：指定磊科 N60 Pro 配置文件，打包 mwan3、luci-app-mwan3 和 eBPF 内核依赖
+          # 通过显式声明，让 1.27 的 daed 直接深度压缩封死进系统的 SquashFS 只读 ROM 层
+          make image PROFILE="netcore_n60-pro" PACKAGES="luci-app-mwan3 mwan3 luci-app-daed daed kmod-sched-bpf kmod-tun ca-bundle ip-full nftables-mod-extra"
+
+      - name: Upload Finished Firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: Netcore-N60Pro-ImmortalWrt-daed1.27
+          path: ib/bin/targets/mediatek/filogic/*sysupgrade.bin
