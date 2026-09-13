@@ -15,31 +15,29 @@ jobs:
 
       - name: Auto Detect and Download Image Builder
         run: |
-          # 核心修复：自动去官网抓取当前最新的 24.10.x 正式版版本号，完美避开 404 找不到文件问题
+          # 自动获取最新 24.10.x 正式版版本号
           VERSION=$(curl -s https://downloads.immortalwrt.org/releases/ | grep -oE '24\.10\.[0-9]+' | sort -V | tail -n 1)
           echo "Detected latest version: $VERSION"
-          
-          # 下载对应的 Filogic 平台离线包
           wget -q "https://immortalwrt.org{VERSION}/targets/mediatek/filogic/immortalwrt-imagebuilder-${VERSION}-mediatek-filogic.Linux-x86_64.tar.zst"
           tar -I zstd -xf immortalwrt-imagebuilder-*.tar.zst
           mv immortalwrt-imagebuilder-* ib
 
-      - name: Pre-inject daed 1.27 IPK
+      - name: Hard-inject daed 1.27 IPK into Packages Pool
         run: |
           cd ib && mkdir -p packages
-          # 提前抓取已经由开发者编译好的 1.27 最新核心包与面板包
+          # 直接将 1.27 的二进制包与面板包塞入本地打包池
           wget -qO packages/daed_1.27.ipk "https://cooluc.com"
           wget -qO packages/luci-app-daed.ipk "https://cooluc.com"
 
-      - name: Compile and Flash directly into ROM
+      - name: Compile and High-Compress into ROM
         run: |
           cd ib
-          # 编译指令：明确注入 mwan3 负载均衡、daed 1.27 所必须的证书依赖、eBPF 依赖
-          # 将它们全家桶 100% 压缩缝合进固件的 SquashFS 只读 ROM 层
-          make image PROFILE="netcore_n60-pro" PACKAGES="luci-app-mwan3 mwan3 luci-app-daed daed kmod-sched-bpf kmod-tun ca-bundle ip-full nftables-mod-extra"
+          # 核心修复：通过“-”号强制砍掉官方源里没用的重型多余包，腾出大量空间
+          # 完美集成 mwan3、Vless/Hysteria2 证书组件 (ca-bundle)、eBPF 内核依赖并压入只读 ROM 层
+          make image PROFILE="netcore_n60-pro" PACKAGES="luci-app-mwan3 mwan3 luci-app-daed daed kmod-sched-bpf kmod-tun ca-bundle ip-full nftables-mod-extra -dae -dnsmasq-full -strongswan -vlmcsd"
 
       - name: Upload Finished Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: Netcore-N60Pro-ImmortalWrt-daed1.27
+          name: Netcore-N60Pro-ImmortalWrt-daed1.27-ROM
           path: ib/bin/targets/mediatek/filogic/*sysupgrade.bin
