@@ -21,34 +21,25 @@ jobs:
           tar -I zstd -xf immortalwrt-imagebuilder-*.tar.zst
           mv immortalwrt-imagebuilder-* ib
 
-      - name: Extract daed 1.27 Core into Rootfs
+      - name: Feed Local Packages Pool
         run: |
           cd ib
-          # 创建标准的系统根目录结构
-          mkdir -p files/usr/bin files/etc/init.d files/etc/config
+          mkdir -p packages
+          # 下载 1.27 版本的最新 ipk 丢入本地包池
+          wget -qO packages/daed_1.27.ipk "https://cooluc.com"
+          wget -qO packages/luci-app-daed.ipk "https://cooluc.com"
           
-          # 下载 1.27 版本的最新单体 ipk
-          wget -qO /tmp/daed_1.27.ipk "https://cooluc.com"
-          wget -qO /tmp/luci_daed.ipk "https://cooluc.com"
-          
-          # 直接在云端解压并提取 1.27 核心程序和 Luci 页面，直接塞进 files 目录
-          cd /tmp
-          tar -zxf daed_1.27.ipk && tar -zxf data.tar.gz && cp -r usr/bin/* $GITHUB_WORKSPACE/ib/files/usr/bin/ 2>/dev/null || true
-          cp -r etc/init.d/* $GITHUB_WORKSPACE/ib/files/etc/init.d/ 2>/dev/null || true
-          
-          rm -rf * && tar -zxf luci_daed.ipk && tar -zxf data.tar.gz && cp -r usr/* $GITHUB_WORKSPACE/ib/files/usr/ 2>/dev/null || true
-          cp -r etc/* $GITHUB_WORKSPACE/ib/files/etc/ 2>/dev/null || true
-          
-          # 确保脚本具备执行权限
-          chmod +x $GITHUB_WORKSPACE/ib/files/usr/bin/*
-          chmod +x $GITHUB_WORKSPACE/ib/files/etc/init.d/*
+          # 核心修正：利用标准的 PATH 机制强行重构本地包索引，逼迫 Image Builder 优先读取 1.27 本地文件
+          chmod +x scripts/ipkg-make-index.sh 2>/dev/null || true
+          ./scripts/ipkg-make-index.sh packages/ > packages/Packages
+          gzip -9c packages/Packages > packages/Packages.gz
 
-      - name: Compile and Flash (Files Injection Mode)
+      - name: Compile and High-Compress into ROM
         run: |
           cd ib
-          # 只在官方源里安装双宽带 mwan3 和 eBPF 必要的内核依赖（不填 daed，完全避免同名包死锁冲突）
-          # 通过 FILES="files" 机制，把上面解压好的 1.27 核心文件无缝缝合进系统只读 SquashFS 中
-          make image PROFILE="netcore_n60-pro" PACKAGES="luci-app-mwan3 mwan3 kmod-sched-bpf kmod-tun ca-bundle ip-full nftables-mod-extra" FILES="files"
+          # 1. 在命令中显式加入 daed 和 luci-app-daed
+          # 2. 剔除官方重名大包（-dae），由内置的高级系统压缩引擎无损压入只读 ROM
+          make image PROFILE="netcore_n60-pro" PACKAGES="luci-app-mwan3 mwan3 luci-app-daed daed kmod-sched-bpf kmod-tun ca-bundle ip-full nftables-mod-extra -dae"
 
       - name: Upload Finished Firmware
         uses: actions/upload-artifact@v4
