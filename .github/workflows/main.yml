@@ -11,7 +11,7 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo apt-get update
-          sudo apt-get install -y build-essential zstd libncurses5-dev gawk git jq wget
+          sudo apt-get install -y build-essential zstd libncurses5-dev gawk git jq wget binutils
 
       - name: Auto Detect and Download Image Builder
         run: |
@@ -21,28 +21,38 @@ jobs:
           tar -I zstd -xf immortalwrt-imagebuilder-*.tar.zst
           mv immortalwrt-imagebuilder-* ib
 
-      - name: Feed Local Packages Pool
+      - name: Extract daed 1.27 Binaries into Rootfs Files
         run: |
           cd ib
-          mkdir -p packages
-          # 下载 1.27 版本的最新 ipk 丢入本地包池
-          wget -qO packages/daed_1.27.ipk "https://cooluc.com"
-          wget -qO packages/luci-app-daed.ipk "https://cooluc.com"
+          # 1. 创建标准的硬件根目录映射结构
+          mkdir -p files/usr/bin files/etc/init.d files/etc/config
           
-          # 核心修正：利用标准的 PATH 机制强行重构本地包索引，逼迫 Image Builder 优先读取 1.27 本地文件
-          chmod +x scripts/ipkg-make-index.sh 2>/dev/null || true
-          ./scripts/ipkg-make-index.sh packages/ > packages/Packages
-          gzip -9c packages/Packages > packages/Packages.gz
+          # 2. 提前拉取 1.27 纯净离线安装包
+          wget -qO /tmp/daed_1.27.ipk "https://cooluc.com"
+          wget -qO /tmp/luci_daed.ipk "https://cooluc.com"
+          
+          # 3. 核心修复：使用 Linux 正统的 ar 工具强行离线剥离 ipk，并将其注入 files 文件夹中
+          cd /tmp
+          ar x daed_1.27.ipk && tar -xf data.tar.xz && cp -r usr/bin/* $GITHUB_WORKSPACE/ib/files/usr/bin/ 2>/dev/null || true
+          cp -r etc/init.d/* $GITHUB_WORKSPACE/ib/files/etc/init.d/ 2>/dev/null || true
+          
+          rm -rf * && ar x luci_daed.ipk && tar -xf data.tar.xz && cp -r usr/* $GITHUB_WORKSPACE/ib/files/usr/ 2>/dev/null || true
+          cp -r etc/* $GITHUB_WORKSPACE/ib/files/etc/ 2>/dev/null || true
+          
+          # 给予核心以及初始化脚本最高的系统执行权限
+          chmod +x $GITHUB_WORKSPACE/ib/files/usr/bin/*
+          chmod +x $GITHUB_WORKSPACE/ib/files/etc/init.d/*
 
-      - name: Compile and High-Compress into ROM
+      - name: Compile and High-Compress into itb ROM
         run: |
           cd ib
-          # 1. 在命令中显式加入 daed 和 luci-app-daed
-          # 2. 剔除官方重名大包（-dae），由内置的高级系统压缩引擎无损压入只读 ROM
-          make image PROFILE="netcore_n60-pro" PACKAGES="luci-app-mwan3 mwan3 luci-app-daed daed kmod-sched-bpf kmod-tun ca-bundle ip-full nftables-mod-extra -dae"
+          # 在 PACKAGES 参数里，不填任何带有 daed 字样的名字，直接绕过云端源的版本检测死锁
+          # 填入 Vless/Hysteria2 必须的根证书 (ca-bundle) 和 eBPF 变量 (kmod-sched-bpf)、双宽带 mwan3 
+          # 通过 FILES="files" 机制，把解压好的 1.27 全套核心在封装 itb 固件的瞬间强制压入 SquashFS ROM 层
+          make image PROFILE="netcore_n60-pro" PACKAGES="luci-app-mwan3 mwan3 kmod-sched-bpf kmod-tun ca-bundle ip-full nftables-mod-extra" FILES="files"
 
       - name: Upload Finished Firmware
         uses: actions/upload-artifact@v4
         with:
           name: Netcore-N60Pro-ImmortalWrt-daed1.27-ROM
-          path: ib/bin/targets/mediatek/filogic/*sysupgrade.bin
+          path: ib/bin/targets/mediatek/filogic/*.itb
