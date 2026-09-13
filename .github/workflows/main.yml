@@ -15,37 +15,28 @@ jobs:
 
       - name: Auto Detect and Download Image Builder
         run: |
+          # 自动获取最新 24.10.x 正式版版本号
           VERSION=$(curl -s https://immortalwrt.org | grep -oE '24\.10\.[0-9]+' | sort -V | tail -n 1)
           echo "Detected latest version: $VERSION"
           wget -q "https://immortalwrt.org${VERSION}/targets/mediatek/filogic/immortalwrt-imagebuilder-${VERSION}-mediatek-filogic.Linux-x86_64.tar.zst"
           tar -I zstd -xf immortalwrt-imagebuilder-*.tar.zst
           mv immortalwrt-imagebuilder-* ib
 
-      - name: Setup Local Repository and Force Hijack
+      - name: Fetch daed 1.27 IPK to Local Workspace
         run: |
           cd ib
-          mkdir -p packages
-          
-          # 1. 下载 1.27 版本的最新离线 ipk 丢入本地包池
-          wget -qO packages/daed_1.27.ipk "https://cooluc.com"
-          wget -qO packages/luci-app-daed.ipk "https://cooluc.com"
-          
-          # 2. 生成完全合规的本地软件包索引数据库
-          chmod +x scripts/ipkg-make-index.sh 2>/dev/null || true
-          ./scripts/ipkg-make-index.sh packages/ > packages/Packages
-          gzip -9c packages/Packages > packages/Packages.gz
-          
-          # 3. 终极破局：强行修改 Image Builder 的软件源配置文件，将本地 packages 文件夹注册为最高优先级的软件源
-          # 这样打包程序在核对依赖时，会100%无视云端，直接读取我们本地准备好的 1.27 文件！
-          sed -i '1i src local_custom file://'"$GITHUB_WORKSPACE"'/ib/packages' repositories.conf
+          # 创建一个独立的外置文件夹，存放我们要硬塞的 1.27 文件
+          mkdir -p my_pkgs
+          wget -qO my_pkgs/daed_1.27.ipk "https://cooluc.com"
+          wget -qO my_pkgs/luci-app-daed.ipk "https://cooluc.com"
 
       - name: Compile and High-Compress into itb ROM
         run: |
           cd ib
-          # 1. 显式声明安装 daed 和 luci-app-daed
-          # 2. 剔除官方源重名大包（-dae），让 1.27 原生触发系统的只读 SquashFS 高倍率压缩
-          # 3. 完美继承你的双宽带 mwan3 以及 Vless/Hysteria2 必备的 ca-bundle 证书链
-          make image PROFILE="netcore_n60-pro" PACKAGES="luci-app-mwan3 mwan3 luci-app-daed daed kmod-sched-bpf kmod-tun ca-bundle ip-full nftables-mod-extra -dae"
+          # 终极解法：在 PACKAGES 参数里，不用包名，而是直接传入我们刚才下载好的本地 .ipk 绝对路径！
+          # 这样 opkg 在打包时会强行读取并解压这两个文件，完美绕过官方源的版本比对死锁！
+          # 通过自带的高级只读 SquashFS 算法，将 1.27、双宽带 mwan3、ca-bundle 证书全家桶无损压入 ROM 层！
+          make image PROFILE="netcore_n60-pro" PACKAGES="luci-app-mwan3 mwan3 kmod-sched-bpf kmod-tun ca-bundle ip-full nftables-mod-extra -dae ./my_pkgs/daed_1.27.ipk ./my_pkgs/luci-app-daed.ipk"
 
       - name: Upload Finished Firmware
         uses: actions/upload-artifact@v4
